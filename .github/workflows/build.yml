@@ -80,9 +80,9 @@ jobs:
         if: inputs.dry_run == 'true'
         run: |
           mkdir -p openwrt/bin/targets/mediatek/filogic
-          touch openwrt/bin/targets/mediatek/filogic/openwrt-mediatek-filogic-bananapi_bpi-r4-sdcard.img.gz
-          touch openwrt/bin/targets/mediatek/filogic/openwrt-mediatek-filogic-bananapi_bpi-r4-emmc-img.bin
-          touch openwrt/bin/targets/mediatek/filogic/config.buildinfo
+          echo "dry-run" > openwrt/bin/targets/mediatek/filogic/openwrt-mediatek-filogic-bananapi_bpi-r4-sdcard.img.gz
+          echo "dry-run" > openwrt/bin/targets/mediatek/filogic/openwrt-mediatek-filogic-bananapi_bpi-r4-emmc-img.bin
+          echo "dry-run" > openwrt/bin/targets/mediatek/filogic/config.buildinfo
           echo "dry-run" > openwrt/bin/targets/mediatek/filogic/sha256sums
 
       - name: Generate sha256sums
