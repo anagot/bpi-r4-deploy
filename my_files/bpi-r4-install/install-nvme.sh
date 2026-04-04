@@ -1,13 +1,12 @@
 #!/bin/sh
 # install-nvme.sh — BPI-R4 NVMe install script
-# Run from nand-rescue system
-# Required files in /tmp:
-#   - openwrt-mediatek-filogic-bananapi_bpi-r4-squashfs-sysupgrade.itb
-#   - openwrt-mediatek-filogic-bananapi_bpi-r4-nvme-img.bin (first install only)
+# Run from NAND rescue system
 
 NVME_DEV="/dev/nvme0n1"
-ITB="/tmp/openwrt-mediatek-filogic-bananapi_bpi-r4-squashfs-sysupgrade.itb"
+ITB="/tmp/bpi-r4.itb"
 IMG="/tmp/openwrt-mediatek-filogic-bananapi_bpi-r4-nvme-img.bin"
+GH_USER="woziwrt"
+GH_REPO="bpi-r4-rescue"
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
 GREEN='\033[0;32m'
@@ -19,25 +18,24 @@ printf "  BPI-R4 NVMe Installer\n"
 printf "=================================================\n"
 printf "\n"
 
-# || 1. Check sysupgrade.itb ||||||||||||||||||||||||||||||||||||||||||||||||||
+# || 1. Check boot media |||||||||||||||||||||||||||||||||||||||||||||||||||||
 
-printf "[ 1/6 ] Checking sysupgrade image...\n"
+printf "[ 1/7 ] Checking boot media...\n"
 
-if [ ! -f "$ITB" ]; then
+if ! grep -q "ubi" /proc/cmdline; then
     printf "\n"
-    printf "${RED}ERROR: Image not found: %s${NC}\n" "$ITB"
-    printf "       Copy sysupgrade.itb to /tmp/ and try again.\n"
+    printf "${RED}ERROR: Must be run from NAND rescue system!${NC}\n"
+    printf "       Current boot is not from NAND/UBI.\n"
     printf "\n"
     exit 1
 fi
 
-printf "        OK -- found %s\n" "$ITB"
-printf "        Size: %s bytes\n" "$(wc -c < "$ITB")"
+printf "        OK -- running from NAND rescue\n"
 printf "\n"
 
 # || 2. NVMe device check |||||||||||||||||||||||||||||||||||||||||||||||||||||
 
-printf "[ 2/6 ] Checking NVMe device...\n"
+printf "[ 2/7 ] Checking NVMe device...\n"
 
 if [ ! -b "$NVME_DEV" ]; then
     printf "\n"
@@ -52,7 +50,7 @@ printf "\n"
 
 # || 3. SMART health check ||||||||||||||||||||||||||||||||||||||||||||||||||||
 
-printf "[ 3/6 ] Checking disk health (SMART)...\n"
+printf "[ 3/7 ] Checking disk health (SMART)...\n"
 printf "\n"
 
 SMART_OUT=$(smartctl -a "$NVME_DEV" 2>/dev/null)
@@ -152,9 +150,61 @@ if [ -z "$SMART_SKIP" ]; then
 
 fi
 
-# || 4. Detect install type |||||||||||||||||||||||||||||||||||||||||||||||||||
+# || 4. Release source |||||||||||||||||||||||||||||||||||||||||||||||||||||||
 
-printf "[ 4/6 ] Detecting install type...\n"
+printf "[ 4/7 ] Release source...\n"
+printf "\n"
+printf "  Use default release or your own fork?\n"
+printf "  [1] Default (woziwrt/bpi-r4-rescue)\n"
+printf "  [2] My fork (same repo name, different username)\n"
+printf "\n"
+printf "  Select [1/2]: "
+read USE_FORK
+
+case "$USE_FORK" in
+    2)
+        printf "\n"
+        printf "        INFO: Fork repo name must remain 'bpi-r4-rescue'\n"
+        printf "        Enter your GitHub username: "
+        read GH_USER
+        ;;
+    *)
+        ;;
+esac
+
+BASE_URL="https://github.com/${GH_USER}/${GH_REPO}/releases/download/rescue-latest"
+ITB_URL="${BASE_URL}/bpi-r4.itb"
+IMG_URL="${BASE_URL}/openwrt-mediatek-filogic-bananapi_bpi-r4-nvme-img.bin"
+
+printf "        URL: %s\n" "$BASE_URL"
+printf "\n"
+
+# || 5. Network check + download |||||||||||||||||||||||||||||||||||||||||||||
+
+printf "[ 5/7 ] Network check...\n"
+printf "\n"
+printf "        INFO: Internet required (~50 MB download)\n"
+printf "        Is ethernet connected? [yes/no]: "
+read NET_CONFIRM
+
+if [ "$NET_CONFIRM" != "yes" ]; then
+    printf "\n        Connect ethernet and run the script again.\n\n"
+    exit 0
+fi
+
+if ! ping -c 1 -W 3 github.com > /dev/null 2>&1; then
+    printf "\n"
+    printf "${RED}ERROR: No network connectivity -- check ethernet and try again.${NC}\n"
+    printf "\n"
+    exit 1
+fi
+
+printf "        OK -- network available\n"
+printf "\n"
+
+# || 6. Detect install type + download |||||||||||||||||||||||||||||||||||||||
+
+printf "[ 6/7 ] Detecting install type...\n"
 
 if [ -b "/dev/nvme0n1p1" ] && [ -b "/dev/nvme0n1p2" ]; then
     mkdir -p /mnt/nvme_check
@@ -171,39 +221,31 @@ else
     printf "        No valid layout detected -- FIRST INSTALL mode\n"
 fi
 
-if [ "$INSTALL_TYPE" = "first" ] && [ ! -f "$IMG" ]; then
-    printf "\n"
-    printf "${RED}ERROR: First install requires nvme-img.bin${NC}\n"
-    printf "       Copy nvme-img.bin to /tmp/ and try again.\n"
-    printf "\n"
+printf "\n"
+
+printf "        Downloading bpi-r4.itb...\n"
+wget -O "$ITB" "$ITB_URL"
+if [ $? -ne 0 ] || [ ! -s "$ITB" ]; then
+    printf "\n${RED}ERROR: Download of bpi-r4.itb failed.${NC}\n\n"
+    rm -f "$ITB"
     exit 1
 fi
+printf "        OK -- bpi-r4.itb downloaded\n\n"
 
-printf "\n"
-
-# || 5. Unmount existing partitions ||||||||||||||||||||||||||||||||||||||||||
-
-printf "[ 5/6 ] Unmounting NVMe partitions...\n"
-
-MOUNTED=$(mount | grep "^/dev/nvme0" | awk '{print $1}')
-if [ -n "$MOUNTED" ]; then
-    for DEV in $MOUNTED; do
-        printf "        Unmounting %s...\n" "$DEV"
-        umount "$DEV" 2>/dev/null
-        if mount | grep -q "^$DEV "; then
-            printf "${RED}ERROR: Could not unmount %s.${NC}\n" "$DEV"
-            exit 1
-        fi
-    done
-    printf "        OK -- all partitions unmounted\n"
-else
-    printf "        OK -- no partitions mounted\n"
+if [ "$INSTALL_TYPE" = "first" ]; then
+    printf "        Downloading nvme-img.bin...\n"
+    wget -O "$IMG" "$IMG_URL"
+    if [ $? -ne 0 ] || [ ! -s "$IMG" ]; then
+        printf "\n${RED}ERROR: Download of nvme-img.bin failed.${NC}\n\n"
+        rm -f "$ITB" "$IMG"
+        exit 1
+    fi
+    printf "        OK -- nvme-img.bin downloaded\n\n"
 fi
-printf "\n"
 
-# || 6. Write image |||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+# || 7. Write image |||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
 
-printf "[ 6/6 ] Writing image...\n"
+printf "[ 7/7 ] Writing image...\n"
 printf "\n"
 printf "${RED}  WARNING: This will ERASE ALL DATA on %s.${NC}\n" "$NVME_DEV"
 printf "\n"
@@ -212,10 +254,19 @@ read CONFIRM
 
 if [ "$CONFIRM" != "YES" ]; then
     printf "\n  Installation cancelled.\n\n"
+    rm -f "$ITB" "$IMG"
     exit 1
 fi
 
 printf "\n"
+
+# Unmount existing partitions
+MOUNTED=$(mount | grep "^/dev/nvme0" | awk '{print $1}')
+if [ -n "$MOUNTED" ]; then
+    for DEV in $MOUNTED; do
+        umount "$DEV" 2>/dev/null || true
+    done
+fi
 
 if [ "$INSTALL_TYPE" = "first" ]; then
     printf "        Writing partition layout (nvme-img.bin)...\n"
@@ -250,7 +301,7 @@ fi
 sync
 printf "        OK -- rootfs written to p2\n\n"
 
-# || Set nvme_boot env ||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+rm -f "$ITB" "$IMG"
 
 printf "        Setting U-Boot env for NVMe boot...\n"
 fw_setenv nvme_boot 1
@@ -268,14 +319,8 @@ printf "\n"
 
 if [ "$INSTALL_TYPE" = "first" ]; then
     printf "  Rebooting into NVMe system...\n\n"
-    sleep 2
-    reboot
 else
     printf "  Rebooting...\n\n"
-    sleep 2
-    reboot
 fi
-
-# NOTE: Future — auto download from GitHub release:
-# wget -O /tmp/nvme-img.bin   "https://github.com/.../nvme-img.bin"
-# wget -O /tmp/sysupgrade.itb "https://github.com/.../sysupgrade.itb"
+sleep 2
+reboot
